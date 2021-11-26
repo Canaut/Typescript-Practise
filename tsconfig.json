@@ -1,0 +1,16 @@
+{
+	"extends": "@tsconfig/node14/tsconfig.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"noImplicitAny": true,
+		"removeComments": true,
+		"preserveConstEnums": true,
+		"sourceMap": true,
+		"typeRoots": [
+			"./node_modules/@types"
+		]
+	},
+	"exclude": [
+		"node_modules"
+	]
+}
