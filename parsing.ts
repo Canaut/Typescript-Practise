@@ -1,13 +1,25 @@
 import parse5= require ("parse5")
 import JSZip =  require("jszip");
 import * as fs from "fs-extra";
-import { stringify } from "json5";
+import http = require("http");
+import { raw } from "body-parser";
+import { resolve } from "path";
+import { promisify } from "util";
 
-// random change//
-
+let count = 0;
 
 interface Element {
     [key:string]:Room;
+}
+
+interface GeoResponse {
+
+    lat?: number;
+
+    lon?: number;
+
+    error?: string;
+
 }
 
 interface Room {
@@ -38,57 +50,115 @@ JSZip.loadAsync(result, { base64: true }).then(function (zip) {
     let indexPromise = getBuildingNames(zip);
     indexPromiseArray.push(indexPromise);
 
-    Promise.all(indexPromiseArray).then(function () {
-        if (tempDataset != {}) {
-            let roomPromiseArray: any = [];
-            let roomPromise = getRooms(zip);
-            roomPromiseArray.push(roomPromise);
-
-            Promise.all(roomPromiseArray).then(function () {
-                console.log(listRooms);
-            })
-        }
-
+    Promise.all(indexPromiseArray).then(async function () {
+        getGeoInfo(zip)
     })
 
     
 });
 
-function getRooms(zip: JSZip) {
-    let roomKey = "rooms/campus/discover/buildings-and-classrooms";
-    let folder = zip.folder(roomKey);
-    if(folder != null) {
-        folder.forEach(function (relativePath: any, file: any) {
-            if(tempDataset[relativePath] != null) {
-               let promise = getRoomHelper(tempDataset[relativePath], file);
-               return promise;
-            }
+function getGeoInfo(zip:JSZip) {
+    return new Promise(async (resolve, reject) => {
+        let link = "http://cs310.students.cs.ubc.ca:11316/api/v1/project_team189/";
+        let promiseArray:any = [];
+        for (let shortName in tempDataset) {
+            let element = tempDataset[shortName];
+            let address = encodeURIComponent(element.address);
+            let targetLink = link + address;
+            let geoResult = {} as GeoResponse;
+            promiseArray.push(new Promise(function (resolve, reject) {
+                http.get(targetLink, (result) => {
+                    result.on("data", (chunk: any) => {
+                        geoResult = JSON.parse(chunk);
+                        getLatAndLon(geoResult, reject, element);
+                        tempDataset[shortName] = element;
+                        resolve(1);
+                    })
+                })
+            }))
+        }
+
+        Promise.all(promiseArray).then(() => {
+            makeRooms(zip)
         })
-    };
+    })
 }
 
-function getRoomHelper(room: Room, file: any) {
+function getLatAndLon(geoResult: GeoResponse, reject: (reason?: any) => void, element: Room) {
+    if (geoResult.lat == undefined || geoResult.lon == undefined) {
+        reject(geoResult.error);
+    }
+    if (geoResult.lat != undefined) {
+        element.lat = geoResult.lat;
+    }
+    if (geoResult.lon != undefined) {
+        element.lon = geoResult.lon;
+    }
+}
+
+function makeRooms(zip: JSZip) {
+    let roomPromiseArray = []
+    if (tempDataset != {}) {
+        roomPromiseArray.push(getRooms(zip));
+        // let promise = getRooms(zip);
+        // roomPromiseArray.push(promise); 
+    }
+    Promise.all(roomPromiseArray).then(() => {
+        // this contains full list of rooms
+        console.log(listRooms);
+        // console.log("final");
+    });
+}
+
+async function getRooms(zip: JSZip) {
+    return new Promise((resolve, reject) => {
+        let promiseArray: any = [];
+        let roomKey = "rooms/campus/discover/buildings-and-classrooms";
+        let folder = zip.folder(roomKey);
+        if(folder != null) {
+            folder.forEach(function (relativePath: any, file: any) {
+                if(tempDataset[relativePath] != null) {
+                    promiseArray.push(file.async("string")
+                    .then(function (content) {
+                        parseRoom(tempDataset[relativePath], parse5.parse(content));
+                    }));
+                }
+            });
+        };
+
+        Promise.all(promiseArray).then(() => {
+            
+            resolve(100);
+        })
+    })
+    
+}
+
+async function getRoomHelper(room: Room, file: any) {
     let promise = file.async("string").then((content) => {
         parseRoom(room, parse5.parse(content));
+    });
+
+    Promise.all([promise]).then(() => {
+        return;
     })
-    return promise;
 }
 
 function parseRoom(room: Room, content: parse5.Document) {
     // console.log("ran parseShortName(...)")
     for (let element of content.childNodes)
         if(element.nodeName == "html") {
-            parseRoomHelper(room, element);
+            return parseRoomHelper(room, element);
         }
 }
 
 function parseRoomHelper(room: Room, node: parse5.Element) {
     if (node == null) {
-        return;
+        return new Error();
     }
     for (let element of node.childNodes) {
         switch(element.nodeName) {
-            case "tbody": createRooms(room, element);
+            case "tbody": createRooms(room, element); 
             case "body": 
             case "div": 
             case "table": 
@@ -124,21 +194,21 @@ function addRooms(room: Room, node: parse5.Element) {
                     break;
                 }
                 case(capacity): {
-                    let seats = getRoomCapacity(td);
+                    let seats = Number(getModifiedText(td));
                     if (seats != undefined) {
                         currentRoom.seats = seats
                     }
                     break;
                 } 
                 case(furniture): {
-                    let furniture = getRoomFurniture(td);
+                    let furniture = getModifiedText(td);
                     if (furniture != undefined) {
                         currentRoom.furniture = furniture;
                     }
                     break;
                 }
                 case(type): {
-                    let type = getRoomType(td);
+                    let type = getModifiedText(td);
                     if (type != undefined) {
                         currentRoom.type = furniture;
                     }
@@ -147,32 +217,15 @@ function addRooms(room: Room, node: parse5.Element) {
             }
         }
     }
+
     listRooms.push(currentRoom);
 }
 
-function getRoomType(td: parse5.Element) {
+function getModifiedText(td: parse5.Element) {
     for (let child of td.childNodes) {
         if (child.nodeName == "#text") {
             let type = (child as parse5.TextNode).value.replace("\n", "").trim();
             return type;
-        }
-    }
-}
-
-function getRoomFurniture(td: parse5.Element) {
-    for (let child of td.childNodes) {
-        if (child.nodeName == "#text") {
-            let furniture = (child as parse5.TextNode).value.replace("\n", "").trim();
-            return furniture;
-        }
-    }
-}
-
-function getRoomCapacity(td: parse5.Element) {
-    for (let child of td.childNodes) {
-        if (child.nodeName == "#text") {
-            let capacity = (child as parse5.TextNode).value.replace("\n", "").trim();
-            return Number(capacity);
         }
     }
 }
@@ -203,32 +256,29 @@ function getRoomNameHelper(aNode: parse5.Element) {
     }
 }
 
-
-    
-
 function getBuildingNames(zip: JSZip) {
     let indexKey = "rooms/index.htm"
     if (zip.file(indexKey) != null) {
         let promise = zip.file(indexKey).async("string").then((content) => {
-            parseShortName(parse5.parse(content));
+            parseBuilding(parse5.parse(content));
         }).catch((err) => {
             console.log("error in loadAsync");
         });
         return promise;
+
     }
+
 }
 
-
-
-function parseShortName(content: parse5.Document) {
+async function parseBuilding(content: parse5.Document) {
     // console.log("ran parseShortName(...)")
     for (let element of content.childNodes)
         if(element.nodeName == "html") {
-            parseShortNameHelper(element);
+            parseBuildingHelper(element);
         }
 }
 
-function parseShortNameHelper(content: parse5.Element) {
+async function parseBuildingHelper(content: parse5.Element) {
     // console.log("ran parseShortNameHelper(...) on ", content.nodeName)
     if (content == null) {
         return;
@@ -239,55 +289,43 @@ function parseShortNameHelper(content: parse5.Element) {
             case "body": 
             case "div": 
             case "table": 
-            case "section": parseShortNameHelper(element); break;
+            case "section": parseBuildingHelper(element); break;
         }
     }
 }
 
-function createBuildings(node: parse5.Element) {
+async function createBuildings(node: parse5.Element) {
+    let promiseArray = [];
     for (let tr of node.childNodes) {
         if (tr.nodeName == "tr") {
-            addBuilding(tr as parse5.Element);
+            promiseArray.push(addBuilding(tr as parse5.Element));
         }
     }
+
+    Promise.all(promiseArray).then(() => {
+        // console.log("ran createBuildings");
+        return;
+    })
 }
 
-function addBuilding(node: parse5.Element) {
+async function addBuilding(node: parse5.Element) {
     let element = {} as Room;
     for (let td of node.childNodes) {
         if (td.nodeName == "td") {
             if (td.attrs[0]["value"] == "views-field views-field-field-building-code") {
-                element.shortname = getShortName(td) as string;
+                element.shortname = getModifiedText(td) as string;
             } else if (td.attrs[0]["value"] == "views-field views-field-title") {
                 element.fullname = getLongName(td) as string;
             } else if (td.attrs[0]["value"] == "views-field views-field-field-building-address") {
-                element.address = getAddress(td) as string;
+                element.address = getModifiedText(td) as string;
             }
         }
     }
+
     if (element.shortname != null) {
         tempDataset[element.shortname] = element;
     }
-}
 
-function getAddress(node: parse5.Element) {
-    for (let child of node.childNodes) {
-        if (child.nodeName == "#text") {
-            let text = (child as parse5.TextNode).value;
-            text = text.replace("\n", "").trim();
-            return text
-        }
-    }
-}
-
-function getShortName(node: parse5.Element) {
-    for (let child of node.childNodes) {
-        if (child.nodeName == "#text") {
-            let text = child as parse5.TextNode;
-            let str:string = text.value.replace("\n", "").trim();
-            return str;
-        }
-    }
 }
 
 function getLongName(node: parse5.Element) {
@@ -302,8 +340,8 @@ function getLongNameHelper(node: parse5.Element) {
     if (node.attrs[1]["value"] == "Building Details and Map") {
         for (let t of node.childNodes) {
             if (t.nodeName == "#text") {
-                let text = (t as parse5.TextNode).value
-                return text
+                let text = (t as parse5.TextNode).value;
+                return text;
             }
         }
     }
