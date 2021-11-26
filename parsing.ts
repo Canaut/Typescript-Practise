@@ -1,7 +1,7 @@
 import parse5= require ("parse5")
 import JSZip =  require("jszip");
 import * as fs from "fs-extra";
-import e = require("express");
+import { stringify } from "json5";
 
 
 interface Element {
@@ -24,6 +24,7 @@ interface Room {
 }
 
 let tempDataset = {} as Element;
+let listRooms = [] as Room[];
 
 
 
@@ -37,9 +38,18 @@ JSZip.loadAsync(result, { base64: true }).then(function (zip) {
 
     Promise.all(indexPromiseArray).then(function () {
         if (tempDataset != {}) {
-            getRooms(zip);
+            let roomPromiseArray: any = [];
+            let roomPromise = getRooms(zip);
+            roomPromiseArray.push(roomPromise);
+
+            Promise.all(roomPromiseArray).then(function () {
+                console.log(listRooms);
+            })
         }
+
     })
+
+    
 });
 
 function getRooms(zip: JSZip) {
@@ -48,11 +58,151 @@ function getRooms(zip: JSZip) {
     if(folder != null) {
         folder.forEach(function (relativePath: any, file: any) {
             if(tempDataset[relativePath] != null) {
-                console.log(tempDataset[relativePath]);
+               let promise = getRoomHelper(tempDataset[relativePath], file);
+               return promise;
             }
         })
     };
 }
+
+function getRoomHelper(room: Room, file: any) {
+    let promise = file.async("string").then((content) => {
+        parseRoom(room, parse5.parse(content));
+    })
+    return promise;
+}
+
+function parseRoom(room: Room, content: parse5.Document) {
+    // console.log("ran parseShortName(...)")
+    for (let element of content.childNodes)
+        if(element.nodeName == "html") {
+            parseRoomHelper(room, element);
+        }
+}
+
+function parseRoomHelper(room: Room, node: parse5.Element) {
+    if (node == null) {
+        return;
+    }
+    for (let element of node.childNodes) {
+        switch(element.nodeName) {
+            case "tbody": createRooms(room, element);
+            case "body": 
+            case "div": 
+            case "table": 
+            case "section": parseRoomHelper(room, element); break;
+        }
+    }
+}
+
+function createRooms(room: Room, node: parse5.Element) {
+    for (let tr of node.childNodes) {
+        if (tr.nodeName == "tr") {
+            addRooms(room, tr as parse5.Element);
+        }
+    }
+}
+
+function addRooms(room: Room, node: parse5.Element) {
+    let currentRoom = room;
+    //default seats is 0, will be changed if the room contains capacity field
+    currentRoom.seats = 0;
+    let number = "views-field views-field-field-room-number";
+    let capacity = "views-field views-field-field-room-capacity";
+    let furniture = "views-field views-field-field-room-furniture";
+    let type = "views-field views-field-field-room-type";
+
+    for (let td of node.childNodes) {
+        if (td.nodeName == "td") {
+            switch(td.attrs[0]["value"]){
+                case(number): {
+                    let nameAndHref = getRoomNameAndHREF(td);
+                    currentRoom.name = currentRoom.shortname + "_" + nameAndHref["name"];
+                    currentRoom.href = nameAndHref["href"];
+                    break;
+                }
+                case(capacity): {
+                    let seats = getRoomCapacity(td);
+                    if (seats != undefined) {
+                        currentRoom.seats = seats
+                    }
+                    break;
+                } 
+                case(furniture): {
+                    let furniture = getRoomFurniture(td);
+                    if (furniture != undefined) {
+                        currentRoom.furniture = furniture;
+                    }
+                    break;
+                }
+                case(type): {
+                    let type = getRoomType(td);
+                    if (type != undefined) {
+                        currentRoom.type = furniture;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    listRooms.push(currentRoom);
+}
+
+function getRoomType(td: parse5.Element) {
+    for (let child of td.childNodes) {
+        if (child.nodeName == "#text") {
+            let type = (child as parse5.TextNode).value.replace("\n", "").trim();
+            return type;
+        }
+    }
+}
+
+function getRoomFurniture(td: parse5.Element) {
+    for (let child of td.childNodes) {
+        if (child.nodeName == "#text") {
+            let furniture = (child as parse5.TextNode).value.replace("\n", "").trim();
+            return furniture;
+        }
+    }
+}
+
+function getRoomCapacity(td: parse5.Element) {
+    for (let child of td.childNodes) {
+        if (child.nodeName == "#text") {
+            let capacity = (child as parse5.TextNode).value.replace("\n", "").trim();
+            return Number(capacity);
+        }
+    }
+}
+
+function getRoomNameAndHREF(td: parse5.Element) {
+    let result = {
+        "name": "",
+        "href": ""
+    }
+    for (let child of td.childNodes) {
+        if (child.nodeName == "a") {
+            let roomName = getRoomNameHelper(child);
+            if(roomName != undefined) {
+                result["name"] = roomName
+            }
+            result["href"] = child.attrs[0].value;
+        }
+    }
+
+    return result;
+}
+
+function getRoomNameHelper(aNode: parse5.Element) {
+    for (let text of aNode.childNodes) {
+        if (text.nodeName == "#text") {
+                return (text as parse5.TextNode).value;
+        }
+    }
+}
+
+
+    
 
 function getBuildingNames(zip: JSZip) {
     let indexKey = "rooms/index.htm"
