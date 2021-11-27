@@ -1,4 +1,19 @@
 "use strict";
+var __extends = (this && this.__extends) || (function () {
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+    return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -38,71 +53,32 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 exports.__esModule = true;
 var parse5 = require("parse5");
 var JSZip = require("jszip");
-var http = require("http");
 var fs = require("fs-extra");
-var RoomClass = /** @class */ (function () {
+var GeoLocation_1 = require("./GeoLocation");
+var SaveAndLoad_1 = require("./SaveAndLoad");
+var RoomClass = /** @class */ (function (_super) {
+    __extends(RoomClass, _super);
     function RoomClass() {
-        this.tempDataset = {};
-        this.listRooms = [];
+        var _this = _super !== null && _super.apply(this, arguments) || this;
+        _this.listRooms = [];
+        _this.saveAndLoad = new SaveAndLoad_1.SaveAndLoad();
+        return _this;
     }
-    RoomClass.prototype.getGeoInfo = function (zip) {
-        var _this = this;
-        return new Promise(function (resolve, reject) {
-            var link = "http://cs310.students.cs.ubc.ca:11316/api/v1/project_team189/";
-            var promiseArray = [];
-            for (var shortName in _this.tempDataset) {
-                var element = _this.tempDataset[shortName];
-                var address = encodeURIComponent(element.address);
-                var targetLink = link + address;
-                var geoResult = {};
-                promiseArray.push(_this.extractGeoFromHTTP(targetLink, geoResult, element));
-            }
-            Promise.all(promiseArray).then(function () {
-                _this.makeRooms(zip);
-            });
-        });
-    };
-    RoomClass.prototype.extractGeoFromHTTP = function (targetLink, geoResult, element) {
-        var _this = this;
-        return new Promise(function (resolve, reject) {
-            http.get(targetLink, function (res) {
-                res.on("data", function (chunk) {
-                    geoResult = JSON.parse(chunk);
-                    var addLatLon = _this.getLatAndLon(geoResult, element);
-                    if (addLatLon === "valid") {
-                        resolve(1);
-                    }
-                    else {
-                        reject(addLatLon);
-                    }
-                });
-            });
-        });
-    };
-    RoomClass.prototype.getLatAndLon = function (geoResult, element) {
-        if (geoResult.lat === undefined || geoResult.lon === undefined) {
-            return geoResult.error;
-        }
-        if (geoResult.lat !== undefined) {
-            element.lat = geoResult.lat;
-        }
-        if (geoResult.lon !== undefined) {
-            element.lon = geoResult.lon;
-        }
-        this.tempDataset[element.shortname] = element;
-        return "valid";
-    };
     RoomClass.prototype.makeRooms = function (zip) {
-        var roomPromiseArray = [];
-        if (this.tempDataset !== {}) {
-            roomPromiseArray.push(this.getRooms(zip));
-            // let promise = getRooms(zip);
-            // roomPromiseArray.push(promise);
-        }
-        Promise.all(roomPromiseArray).then(function () {
-            // this contains full list of rooms
-            // console.log(this.listRooms);
-            // console.log("final");
+        var _this = this;
+        return new Promise(function (resolve, reject) {
+            var roomPromiseArray = [];
+            if (_this.building !== {}) {
+                roomPromiseArray.push(_this.getRooms(zip));
+                // let promise = getRooms(zip);
+                // roomPromiseArray.push(promise);
+            }
+            Promise.all(roomPromiseArray).then(function () {
+                // this contains full list of rooms
+                resolve(_this.listRooms);
+                // console.log(this.listRooms);
+                // console.log("final");
+            });
         });
     };
     RoomClass.prototype.getRooms = function (zip) {
@@ -115,10 +91,10 @@ var RoomClass = /** @class */ (function () {
                         var folder = zip.folder(roomKey);
                         if (folder != null) {
                             folder.forEach(function (relativePath, file) {
-                                if (_this.tempDataset[relativePath] != null) {
+                                if (_this.building[relativePath] != null) {
                                     promiseArray.push(file.async("string")
                                         .then(function (content) {
-                                        _this.parseRoom(_this.tempDataset[relativePath], parse5.parse(content));
+                                        _this.parseRoom(_this.building[relativePath], parse5.parse(content));
                                     }));
                                 }
                             });
@@ -181,7 +157,7 @@ var RoomClass = /** @class */ (function () {
         }
     };
     RoomClass.prototype.addRooms = function (room, node) {
-        var currentRoom = room;
+        var currentRoom = Object.assign({}, room);
         // default seats is 0, will be changed if the room contains capacity field
         currentRoom.seats = 0;
         var number = "views-field views-field-field-room-number";
@@ -195,6 +171,7 @@ var RoomClass = /** @class */ (function () {
                     case (number): {
                         var nameAndHref = this.getRoomNameAndHREF(td);
                         currentRoom.name = currentRoom.shortname + "_" + nameAndHref["name"];
+                        currentRoom.number = nameAndHref["name"];
                         currentRoom.href = nameAndHref["href"];
                         break;
                     }
@@ -224,15 +201,6 @@ var RoomClass = /** @class */ (function () {
         }
         this.listRooms.push(currentRoom);
     };
-    RoomClass.prototype.getModifiedText = function (td) {
-        for (var _i = 0, _a = td.childNodes; _i < _a.length; _i++) {
-            var child = _a[_i];
-            if (child.nodeName === "#text") {
-                var type = child.value.replace("\n", "").trim();
-                return type;
-            }
-        }
-    };
     RoomClass.prototype.getRoomNameAndHREF = function (td) {
         var nameAndHref = {
             name: "",
@@ -260,126 +228,40 @@ var RoomClass = /** @class */ (function () {
     };
     RoomClass.prototype.getBuildingNames = function (zip) {
         var _this = this;
-        var indexKey = "rooms/index.htm";
-        if (zip.file(indexKey) != null) {
-            var promise = zip.file(indexKey).async("string").then(function (content) {
-                _this.parseBuilding(parse5.parse(content));
-            })["catch"](function (err) {
-                console.log("error in loadAsync");
-            });
-            return promise;
-        }
-    };
-    RoomClass.prototype.parseBuilding = function (content) {
-        // console.log("ran parseShortName(...)")
-        for (var _i = 0, _a = content.childNodes; _i < _a.length; _i++) {
-            var element = _a[_i];
-            if (element.nodeName === "html") {
-                this.parseBuildingHelper(element);
-            }
-        }
-    };
-    RoomClass.prototype.parseBuildingHelper = function (content) {
-        // console.log("ran parseShortNameHelper(...) on ", content.nodeName)
-        if (content == null) {
-            return;
-        }
-        for (var _i = 0, _a = content.childNodes; _i < _a.length; _i++) {
-            var element = _a[_i];
-            switch (element.nodeName) {
-                case "tbody": this.createBuildings(element);
-                case "body":
-                case "div":
-                case "table":
-                case "section": {
-                    this.parseBuildingHelper(element);
-                    break;
-                }
-            }
-        }
-    };
-    RoomClass.prototype.createBuildings = function (node) {
-        return __awaiter(this, void 0, void 0, function () {
-            var promiseArray, _i, _a, tr;
-            return __generator(this, function (_b) {
-                promiseArray = [];
-                for (_i = 0, _a = node.childNodes; _i < _a.length; _i++) {
-                    tr = _a[_i];
-                    if (tr.nodeName === "tr") {
-                        promiseArray.push(this.addBuilding(tr));
-                    }
-                }
-                Promise.all(promiseArray).then(function () {
-                    // console.log("ran createBuildings");
-                    return;
+        return new Promise(function (resolve, reject) {
+            var indexKey = "rooms/index.htm";
+            var promise;
+            var file = zip.file((indexKey));
+            if (file != null) {
+                promise = file.async("string").then(function (content) {
+                    _this.parseBuilding(parse5.parse(content));
+                })["catch"](function (err) {
+                    reject(err);
                 });
-                return [2 /*return*/];
+            }
+            Promise.all([promise]).then(function () {
+                _this.getGeoInfo().then(function () {
+                    resolve(_this.makeRooms(zip));
+                });
             });
         });
-    };
-    RoomClass.prototype.addBuilding = function (node) {
-        return __awaiter(this, void 0, void 0, function () {
-            var element, _i, _a, td;
-            return __generator(this, function (_b) {
-                element = {};
-                for (_i = 0, _a = node.childNodes; _i < _a.length; _i++) {
-                    td = _a[_i];
-                    if (td.nodeName === "td") {
-                        if (td.attrs[0]["value"] === "views-field views-field-field-building-code") {
-                            element.shortname = this.getModifiedText(td);
-                        }
-                        else if (td.attrs[0]["value"] === "views-field views-field-title") {
-                            element.fullname = this.getLongName(td);
-                        }
-                        else if (td.attrs[0]["value"] === "views-field views-field-field-building-address") {
-                            element.address = this.getModifiedText(td);
-                        }
-                    }
-                }
-                if (element.shortname != null) {
-                    this.tempDataset[element.shortname] = element;
-                }
-                return [2 /*return*/];
-            });
-        });
-    };
-    RoomClass.prototype.getLongName = function (node) {
-        for (var _i = 0, _a = node.childNodes; _i < _a.length; _i++) {
-            var a = _a[_i];
-            if (a.nodeName === "a") {
-                return this.getLongNameHelper(a);
-            }
-        }
-    };
-    RoomClass.prototype.getLongNameHelper = function (node) {
-        if (node.attrs[1]["value"] === "Building Details and Map") {
-            for (var _i = 0, _a = node.childNodes; _i < _a.length; _i++) {
-                var t = _a[_i];
-                if (t.nodeName === "#text") {
-                    var text = t.value;
-                    return text;
-                }
-            }
-        }
     };
     return RoomClass;
-}());
+}(GeoLocation_1.GeoLocation));
 exports["default"] = RoomClass;
 var start = new RoomClass;
 var result = fs.readFileSync("./rooms.zip").toString("base64");
 // console.log(result);
 // console.log(JSZip.loadAsync(result, { base64: true }))
 JSZip.loadAsync(result, { base64: true }).then(function (zip) {
-    var indexPromiseArray = [];
-    var indexPromise = start.getBuildingNames(zip);
-    indexPromiseArray.push(indexPromise);
-    Promise.all(indexPromiseArray).then(function () {
-        return __awaiter(this, void 0, void 0, function () {
-            return __generator(this, function (_a) {
-                start.getGeoInfo(zip);
-                console.log(start.listRooms);
-                return [2 /*return*/];
-            });
-        });
+    // let indexPromiseArray: any = [];
+    // let indexPromise = start.getBuildingNames(zip);
+    // indexPromiseArray.push(indexPromise);
+    // Promise.all(indexPromiseArray).then(function () {
+    // 	console.log("ran here");
+    // 	console.log(start.listRooms)
+    // });
+    start.getBuildingNames(zip).then(function (res) {
+        console.log(start.saveAndLoad.load());
     });
 });
